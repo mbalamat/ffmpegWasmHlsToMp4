@@ -1,0 +1,75 @@
+<body>
+  <input id="playlistUrl">
+  <button onclick="download()">Download mp4</button>
+
+  <script src="./scripts/ffmpeg.min.js"></script>
+  <script>
+    const { createFFmpeg } = FFmpeg;
+    const ffmpeg = createFFmpeg({ log: true });
+
+    const download = async (filename = 'video.mp4') => {
+      const input = document.getElementById('playlistUrl').value;
+      const baseUrl = input.split("/").slice(0, -1).join('/');
+
+      await ffmpeg.load();
+      console.log(`Playlist to download: ${input}`);
+
+      function arrayBufferToString(buf) {
+        const blob = new Blob([buf])
+        const f = new FileReader();
+        f.readAsText(blob);
+        return new Promise((resolve, reject) => {
+          f.onload = () => {
+            resolve(f.result);
+          }
+          f.onerror = (e) => {
+            reject(e);
+          }
+        });
+      }
+
+      async function fetchFileToArrayBuffer(url) {
+        const file = await fetch(url);
+        const fileArrayBuffer = await file.arrayBuffer();
+        return fileArrayBuffer;
+      }
+
+      const playlistFileArrayBuffer = await fetchFileToArrayBuffer(input);
+      await ffmpeg.FS('writeFile', 'master.m3u8', new Uint8Array(playlistFileArrayBuffer));
+      console.log('successfully written master.m3u8 to MEMFS');
+
+      const playlistText = await arrayBufferToString(playlistFileArrayBuffer);
+
+      console.log(`playlistText:\n${playlistText}`);
+      const mediaPlaylistFileName = playlistText.split("\n").filter((x)=>x.includes('m3u8'))[0];
+      console.log(mediaPlaylistFileName);
+      
+      const mediaPlaylistUrl = `${baseUrl}/${mediaPlaylistFileName}`;
+      console.log(mediaPlaylistUrl);
+      const mediaPlaylist = await fetchFileToArrayBuffer(mediaPlaylistUrl);
+      await ffmpeg.FS('writeFile', mediaPlaylistFileName, new Uint8Array(mediaPlaylist));
+      console.log('successfully written mediaPlaylist to MEMFS')
+
+      const mediaPlaylistText = await arrayBufferToString(mediaPlaylist);
+      console.log(`mediaPlaylistText:\n${mediaPlaylistText}`);
+      const chunks = mediaPlaylistText.split("\n").filter(x => x.includes(".ts"));
+      for (const chunk of chunks) {
+        const chunkUrl = `${baseUrl}/${chunk}`;
+        const chunkData = await fetchFileToArrayBuffer(chunkUrl);
+        await ffmpeg.FS('writeFile', chunk, new Uint8Array(chunkData));
+      }
+      console.log('successfully written all chunks to MEMFS')
+
+      await ffmpeg.run('-i', 'master.m3u8',  '-c', 'copy','./output.mp4');
+      const data = ffmpeg.FS('readFile', './output.mp4');
+
+      const a = document.createElement('a');
+      var url = window.URL.createObjectURL(new Blob([data], {type: "video/mp4"}));
+      a.href = url;
+      a.download = filename;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    }
+  </script>
+</body>
