@@ -4,6 +4,16 @@
 
   <script src="./scripts/ffmpeg.min.js"></script>
   <script>
+
+    function groupBy(arr, n) {
+        const copy = arr.concat();
+        const result = [];
+        while (copy.length){
+          result.push(copy.splice(0, n));
+        }
+        return result;
+    }
+
     const { createFFmpeg } = FFmpeg;
     const ffmpeg = createFFmpeg({ log: true });
 
@@ -34,6 +44,12 @@
         return fileArrayBuffer;
       }
 
+      async function fetchAndWriteChunkToFFmpegFS(chunk) {
+        const chunkUrl = `${baseUrl}/${chunk}`;
+        const chunkData = await fetchFileToArrayBuffer(chunkUrl);
+        await ffmpeg.FS('writeFile', chunk, new Uint8Array(chunkData));
+      }
+
       const playlistFileArrayBuffer = await fetchFileToArrayBuffer(input);
       await ffmpeg.FS('writeFile', 'master.m3u8', new Uint8Array(playlistFileArrayBuffer));
       console.log('successfully written master.m3u8 to MEMFS');
@@ -41,9 +57,9 @@
       const playlistText = await arrayBufferToString(playlistFileArrayBuffer);
 
       console.log(`playlistText:\n${playlistText}`);
-      const mediaPlaylistFileName = playlistText.split("\n").filter((x)=>x.includes('m3u8'))[0];
+      const mediaPlaylistFileName = playlistText.split("\n").filter((x) => x.includes('m3u8'))[0];
       console.log(mediaPlaylistFileName);
-      
+
       const mediaPlaylistUrl = `${baseUrl}/${mediaPlaylistFileName}`;
       console.log(mediaPlaylistUrl);
       const mediaPlaylist = await fetchFileToArrayBuffer(mediaPlaylistUrl);
@@ -53,18 +69,19 @@
       const mediaPlaylistText = await arrayBufferToString(mediaPlaylist);
       console.log(`mediaPlaylistText:\n${mediaPlaylistText}`);
       const chunks = mediaPlaylistText.split("\n").filter(x => x.includes(".ts"));
-      for (const chunk of chunks) {
-        const chunkUrl = `${baseUrl}/${chunk}`;
-        const chunkData = await fetchFileToArrayBuffer(chunkUrl);
-        await ffmpeg.FS('writeFile', chunk, new Uint8Array(chunkData));
+
+      const chunkGroups = groupBy(chunks, 30); // 30 requests at the same time
+      
+      for (const cGroup of chunkGroups) {
+        await Promise.all(cGroup.map(chunk => fetchAndWriteChunkToFFmpegFS(chunk)));
       }
       console.log('successfully written all chunks to MEMFS')
 
-      await ffmpeg.run('-i', 'master.m3u8',  '-c', 'copy','./output.mp4');
+      await ffmpeg.run('-i', 'master.m3u8', '-c', 'copy', './output.mp4');
       const data = ffmpeg.FS('readFile', './output.mp4');
 
       const a = document.createElement('a');
-      var url = window.URL.createObjectURL(new Blob([data], {type: "video/mp4"}));
+      const url = window.URL.createObjectURL(new Blob([data], { type: "video/mp4" }));
       a.href = url;
       a.download = filename;
       a.click();
